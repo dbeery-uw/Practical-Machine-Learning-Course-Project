@@ -1,0 +1,216 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Danny Beery"
+date: "2022-11-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Project Description 
+
+The following uses data from the Weight Lifting Exercise Dataset to make a prediction model of classes of performing an exercise. Accelormeter data from 6 participants belts, forearms, arms, and dumbbells 5 classes were measured during 5 "classes" - A, B, C, D, and E - of performing a barbell fit correctly and incorrectly. After dividing the data into training and test sets, we conducted a principal component analysis and created a random forest model using the training set. Using the test set, our prediction model we were able to predict with >90% accuracy the class.
+
+The Weight Lifting Exercise Dat set contained 160 variables, including the "classe" outcome indicating the classes of barbell actions. After eliminating all variables with missing data (all removed variables had >95% of values missing), we condensed our dataset to 60 variables.  
+
+```{r, message = FALSE}
+library(caret)
+library(tidyr)
+library(dplyr)
+library(corrplot)
+library(naivebayes)
+library(e1071)
+library(randomForest)
+```
+
+```{r, echo = TRUE, eval = TRUE}
+pml <- read.csv("pml-training.csv", na = c("", "NA", "#DIV/0"))
+
+colMeans(is.na(pml))
+
+pml_noNA <- colMeans(is.na(pml))[colMeans(is.na(pml) == 0) == TRUE] %>%
+  names()
+
+completepml <- pml[pml_noNA]
+dim(completepml)
+```
+
+
+We then split the tidyer dataset into test and training sets, using a 75/25 split.5 additional identifier variables were removed, leaving 55 variables =  54 predictors and 1 response variable.
+
+```{r}
+inTrain = createDataPartition(completepml$classe, p = .75, list = FALSE)
+
+training = completepml[inTrain,]
+testing = completepml[-inTrain,]
+
+dim(training); dim(testing)
+
+training <- training[-c(2:5)]
+testing <- testing[-c(2:5)]
+```
+
+
+Realizing that we had not accounted for coliner predictors and outliers, we performed correlation and skewness analysis on the training set. 
+
+```{r}
+training_num <- training[,-c(1,2,56)] %>%
+  apply(as.numeric, MARGIN = 2)
+cor <- cor(training_num)
+colinear <- findCorrelation(cor, cutoff = .8, exact = TRUE)
+training <- training[,-colinear]
+testing <- testing[,-colinear]
+
+training[2:42] %>%
+  apply(skewness, MARGIN = 2) %>%
+  sort()
+par(mfrow = c(2,2))
+
+table(round(training$gyros_forearm_y))
+max(training$gyros_forearm_y)
+
+training %>%
+  filter(training$gyros_forearm_y == 311) #5373
+
+table(round(training$gyros_forearm_z))
+max(training$gyros_forearm_z)
+
+training %>%
+  filter(gyros_forearm_z == 231) #5373
+
+table(round(training$gyros_dumbbell_z))
+max(training$gyros_dumbbell_z)
+
+training %>%
+  filter(training$gyros_dumbbell_z == 317) #5373
+
+training <- training[!(training$X == 5373) == TRUE,]
+
+skewness <- training[2:42] %>%
+  apply(skewness, MARGIN = 2) %>%
+  sort()
+head(skewness)
+```
+
+
+We then identified 10 colinear predictors that were removed from the model, leaving us with 44 predictors and 1 response variable. 
+
+We then assessed skewness of predictors and identified 3 variables that were highly skewed. After exploring the values of these predictors, we found that one observation was responsible for the high skewness in all 3 variables. That variable was removed, leaving us with 43 predictors and 1 response variable. 
+
+
+
+After pre-processing the training set, we further pre-processed the training data using a principle component analysis. This PCA found that 27 principle components explained >95% of the variance. We then created a random forest model using the pre-processed data (pre-processing and model creation were latter condensed into the same code). 
+
+```{r, echo = TRUE, eval = TRUE}
+
+preObj <- preProcess(training, method = c("pca", "center","scale"))
+trainingPC <- predict(preObj, training)
+mod4 <- randomForest(as.factor(classe) ~ ., data = trainingPC)
+
+```
+
+
+After preprocessing the testing set, we made predictions using the pre-processed testing set and the random forest model. 
+
+```{r, echo = TRUE, eval = TRUE}
+testPC <- predict(preObj, testing)
+predictions4 <- predict(mod4, testPC)
+
+d <- confusionMatrix(as.factor(testing$classe), predictions4)
+d
+```
+
+
+Our confusion matrix model revealed that our prediction model had a >90% out-of-sample accuracy.
+
+```{r, eval = TRUE} 
+testpml <- read.csv("pml-testing.csv", na = c("", "NA", "#DIV/0"))
+testpml <- testpml[c(pml_noNA[1:59], "problem_id")]
+testpml <- testpml[,-c(2:5)]
+testpml <- testpml[,-colinear]
+
+testpmlPC <- predict(preObj, testpml)
+pred4 <- predict(mod4, testpmlPC)
+pred4
+```
+
+
+Unfortunately, our rf model was unable to adequately predict the "classes" of the 20 cases in the out-of-sample test set, performing at only 65% accuracy. 
+
+For that reason, we decided to create 7 more prediction models -- naive bayes w/ PCA, knn w/ PCA, treebag w/ PCA, naive bayes, knn, treebag, and rf (code presented but not evaluated).
+
+Two of these models predicted the test set w/ 100% accuracy. We decided not to use these models since they were likely overfitting the data. Out of all these models, only the knn model w/o PCA was able to predict the 20 cases with >80% accuracy. 
+
+```{r, echo = TRUE, eval = FALSE}
+mod1 <- train(classe ~ ., data = training, preProcess = c("pca", "center", "scale"), method = "naive_bayes")
+mod2 <- train(classe ~ ., data = training, preProcess = c("pca", "center", "scale"), method = "treebag")
+mod3 <- train(classe ~ ., data = training, preProcess = c("pca","center","scale"), method = "knn")
+
+preObj <- preProcess(training, method = c("pca", "center","scale"))
+trainingPC <- predict(preObj, training)
+mod4 <- randomForest(as.factor(classe) ~ ., data = trainingPC)
+
+mod5 <- train(classe ~ ., data = training, preProcess = c("center", "scale"), method = "naive_bayes")
+mod6 <- train(classe ~ ., data = training, preProcess = c("center", "scale"), method = "treebag")
+mod7 <- train(classe ~ ., data = training, preProcess = c("center","scale"), method = "knn")
+
+preObj2 <- preProcess(training, method = c("center","scale"))
+trainingPC2 <- predict(preObj2, training)
+mod8 <- randomForest(as.factor(classe) ~ ., data = trainingPC2)
+```
+
+```{r, echo = TRUE, eval = FALSE}
+predictions1 <- predict(mod1, testing)
+predictions2 <- predict(mod2, testing)
+predictions3 <- predict(mod3, testing)
+testPC <- predict(preObj, testing)
+predictions4 <- predict(mod4, testPC)
+predictions5 <- predict(mod5, testing)
+predictions6 <- predict(mod6, testing)
+predictions7 <- predict(mod7, testing)
+testPC2 <- predict(preObj2, testing)
+predictions8 <- predict(mod8, testPC2)
+```
+
+```{r, echo = TRUE, eval = FALSE}
+a <- confusionMatrix(as.factor(testing$classe), predictions1)
+b <- confusionMatrix(as.factor(testing$classe), predictions2)
+c <- confusionMatrix(as.factor(testing$classe), predictions3)
+d <- confusionMatrix(as.factor(testing$classe), predictions4)
+e <- confusionMatrix(as.factor(testing$classe), predictions5)
+f <- confusionMatrix(as.factor(testing$classe), predictions6)
+g <- confusionMatrix(as.factor(testing$classe), predictions7)
+h <- confusionMatrix(as.factor(testing$classe), predictions8)
+
+a$byClass[1:5,1:2]
+b$byClass[1:5,1:2]
+c$byClass[1:5,1:2]
+d$byClass[1:5,1:2]
+e$byClass[1:5,1:2]
+f$byClass[1:5,1:2]
+g$byClass[1:5,1:2]
+h$byClass[1:5,1:2]
+```
+
+```{r, echo = TRUE, eval = FALSE}
+pred1 <- predict(mod1, testpml)
+pred2 <- predict(mod2, testpml)
+pred3 <- predict(mod3, testpml)
+testpmlPC <- predict(preObj, testpml)
+pred4 <- predict(mod4, testpmlPC)
+pred5 <- predict(mod5, testpml)
+pred6 <- predict(mod6, testpml)
+pred7 <- predict(mod7, testpml)
+testpmlPC2 <- predict(preObj2, testpml)
+pred8 <- predict(mod8, testpmlPC2)
+
+comparison <- data.frame(pred1, pred2, pred3, pred4, pred5, pred6, pred7, pred8)
+colnames(comparison) <- c("naive_bayes_PCA", "treebag_PCA", "knn_PCA", "rf_PCA", "naive_bayes", "tree_bag", "knn", "rf")
+comparison
+}
+```
+
+
+
